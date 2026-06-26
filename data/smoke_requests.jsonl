@@ -1,0 +1,4 @@
+{"user_id":"u001","tenant_id":"tenant_basic","task_type":"summary","input":"Summarize the SemRoute Gateway goal in one sentence.","priority":"normal","stream":false,"metadata":{"case":"summary_to_fast"}}
+{"user_id":"u002","tenant_id":"tenant_basic","task_type":"rag_qa","input":"What does the gateway do before calling a backend?","priority":"normal","stream":false,"metadata":{"case":"rag_qa_to_quality"}}
+{"user_id":"u003","tenant_id":"tenant_basic","task_type":"tool_call","input":"Simulate a tool call request through the gateway.","priority":"normal","stream":false,"metadata":{"case":"tool_call_to_unstable"}}
+{"user_id":"u004","tenant_id":"tenant_premium","task_type":"text_to_video","input":"Generate a high quality short video from a text prompt about a city at sunrise.","priority":"high","stream":false,"metadata":{"case":"text_to_video_quality_first"}}

@@ -1,0 +1,30 @@
+.venv/
+# runtime outputs
+logs/
+outputs/
+__pycache__/
+*.pyc
+
+# local env
+.env
+.venv/
+.conda/
+Miniconda3.sh
+
+# large reference / external projects
+higress-main(reference)/
+higress-main.zip
+
+# personal / defense / development docs
+docs/
+Maker.md
+Maker_v0.7.md
+学习路线.md
+SemRoute-Gateway_技术开发文档*.md
+*中期*
+*答辩*
+
+# IDE / OS
+.vscode/
+.DS_Store
+Thumbs.db

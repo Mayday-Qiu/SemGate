@@ -1,0 +1,100 @@
+{
+  "version": "v0.7-seed",
+  "profiles": [
+    {
+      "workflow_id": "tech_qa_workflow",
+      "workflow_type": "langgraph",
+      "supported_tasks": ["knowledge_qa"],
+      "capabilities": ["rag", "citation", "evidence_check", "permission_check"],
+      "allowed_tools": ["doc_search_tool", "evidence_check_tool"],
+      "required_permission_scope": ["kb:project_docs:read", "tool:doc_search:use", "tool:evidence_check:use"],
+      "avg_latency_ms": 1400,
+      "p95_latency_ms": 2600,
+      "success_rate": 0.82,
+      "citation_coverage": 0.78,
+      "tool_success_rate": 0.95,
+      "error_rate": 0.04,
+      "cost_level": "low",
+      "healthy": true,
+      "metrics_source": "seed",
+      "updated_by_eval_run_id": null,
+      "metrics_report_path": null
+    },
+    {
+      "workflow_id": "doc_review_workflow",
+      "workflow_type": "langgraph",
+      "supported_tasks": ["doc_review"],
+      "capabilities": ["inspection", "rag", "citation", "risk_check", "permission_check", "evidence_check"],
+      "allowed_tools": ["doc_search_tool", "inspection_tool", "evidence_check_tool"],
+      "required_permission_scope": [
+        "kb:project_docs:read",
+        "tool:doc_search:use",
+        "tool:inspection:use",
+        "tool:evidence_check:use"
+      ],
+      "avg_latency_ms": 1800,
+      "p95_latency_ms": 3200,
+      "success_rate": 0.76,
+      "citation_coverage": 0.72,
+      "tool_success_rate": 0.90,
+      "error_rate": 0.06,
+      "cost_level": "normal",
+      "healthy": true,
+      "metrics_source": "seed",
+      "updated_by_eval_run_id": null,
+      "metrics_report_path": null
+    },
+    {
+      "workflow_id": "incident_analysis_workflow",
+      "workflow_type": "langgraph",
+      "supported_tasks": ["incident_analysis"],
+      "capabilities": ["business_query", "rag", "summary", "fallback", "permission_check", "evidence_check", "citation"],
+      "allowed_tools": ["business_query_tool", "service_status_tool", "doc_search_tool", "evidence_check_tool"],
+      "required_permission_scope": [
+        "kb:project_docs:read",
+        "tool:business:read",
+        "tool:service_status:read",
+        "tool:doc_search:use",
+        "tool:evidence_check:use"
+      ],
+      "avg_latency_ms": 2200,
+      "p95_latency_ms": 4200,
+      "success_rate": 0.80,
+      "citation_coverage": 0.70,
+      "tool_success_rate": 0.86,
+      "error_rate": 0.08,
+      "cost_level": "normal",
+      "healthy": true,
+      "metrics_source": "seed",
+      "updated_by_eval_run_id": null,
+      "metrics_report_path": null
+    },
+    {
+      "workflow_id": "media_generation_workflow",
+      "workflow_type": "stub",
+      "supported_tasks": ["media_generation"],
+      "capabilities": [
+        "media_generation",
+        "image_generation",
+        "video_generation",
+        "prompt_safety",
+        "asset_metadata",
+        "fallback",
+        "permission_check"
+      ],
+      "allowed_tools": ["image_generation_tool", "video_generation_tool"],
+      "required_permission_scope": [],
+      "avg_latency_ms": 2600,
+      "p95_latency_ms": 5000,
+      "success_rate": 0.74,
+      "citation_coverage": 0.0,
+      "tool_success_rate": 0.82,
+      "error_rate": 0.10,
+      "cost_level": "high",
+      "healthy": true,
+      "metrics_source": "seed",
+      "updated_by_eval_run_id": null,
+      "metrics_report_path": null
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+{"user_id":"u101","tenant_id":"tenant_basic","task_type":"summary","input":"Check resilience behavior for a short summary request."}
+{"user_id":"u102","tenant_id":"tenant_basic","task_type":"rag_qa","input":"Check resilience behavior for a RAG-style request."}
+{"user_id":"u103","tenant_id":"tenant_basic","task_type":"text_to_video","input":"Check resilience behavior for a quality-heavy text-to-video request."}

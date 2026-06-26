@@ -1,0 +1,139 @@
+services:
+  gateway:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      SEMROUTE_API_KEY: dev-key
+      GATEWAY_POLICY: ${GATEWAY_POLICY:-fixed}
+      GATEWAY_REQUEST_TIMEOUT_S: ${GATEWAY_REQUEST_TIMEOUT_S:-1.5}
+      GATEWAY_FALLBACK_MAX_ATTEMPTS: ${GATEWAY_FALLBACK_MAX_ATTEMPTS:-2}
+      GATEWAY_RATE_LIMIT_ENABLED: ${GATEWAY_RATE_LIMIT_ENABLED:-true}
+      GATEWAY_RATE_LIMIT_REPLENISH_RATE: ${GATEWAY_RATE_LIMIT_REPLENISH_RATE:-1}
+      GATEWAY_RATE_LIMIT_BURST_CAPACITY: ${GATEWAY_RATE_LIMIT_BURST_CAPACITY:-5}
+      GATEWAY_RATE_LIMIT_REQUESTED_TOKENS: ${GATEWAY_RATE_LIMIT_REQUESTED_TOKENS:-1}
+      GATEWAY_CIRCUIT_BREAKER_ENABLED: ${GATEWAY_CIRCUIT_BREAKER_ENABLED:-true}
+      GATEWAY_CIRCUIT_SLIDING_WINDOW_SIZE: ${GATEWAY_CIRCUIT_SLIDING_WINDOW_SIZE:-10}
+      GATEWAY_CIRCUIT_MINIMUM_NUMBER_OF_CALLS: ${GATEWAY_CIRCUIT_MINIMUM_NUMBER_OF_CALLS:-4}
+      GATEWAY_CIRCUIT_FAILURE_RATE_THRESHOLD: ${GATEWAY_CIRCUIT_FAILURE_RATE_THRESHOLD:-50}
+      GATEWAY_CIRCUIT_SLOW_CALL_RATE_THRESHOLD: ${GATEWAY_CIRCUIT_SLOW_CALL_RATE_THRESHOLD:-60}
+      GATEWAY_CIRCUIT_WAIT_DURATION_IN_OPEN_STATE_S: ${GATEWAY_CIRCUIT_WAIT_DURATION_IN_OPEN_STATE_S:-10}
+      GATEWAY_CIRCUIT_PERMITTED_CALLS_IN_HALF_OPEN: ${GATEWAY_CIRCUIT_PERMITTED_CALLS_IN_HALF_OPEN:-2}
+      GATEWAY_LOG_PATH: logs/gateway.jsonl
+      GATEWAY_PROFILES_PATH: outputs/profiles/service_profiles.json
+      GATEWAY_WORKFLOW_PROFILES_PATH: configs/workflow_profiles.json
+      GATEWAY_CONSUMERS_PATH: configs/consumers.json
+      GATEWAY_TRACE_LOG_PATH: logs/trace_events.jsonl
+      GATEWAY_TRACE_OUTPUT_DIR: outputs/traces
+      AGENT_ORCHESTRATOR_URL: http://agent_orchestrator:8010/invoke
+      MOCK_FAST_URL: http://mock_fast:8001/invoke
+      MOCK_QUALITY_URL: http://mock_quality:8002/invoke
+      MOCK_UNSTABLE_URL: http://mock_unstable:8003/invoke
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./outputs:/app/outputs
+    depends_on:
+      - agent_orchestrator
+
+  agent_orchestrator:
+    build: .
+    command: uvicorn services.agent_orchestrator.main:app --host 0.0.0.0 --port 8010
+    environment:
+      RAG_SERVICE_URL: http://rag_service:8020
+      TOOL_SERVICE_URL: http://tool_service:8030
+      MODEL_BACKEND_URL: http://model_backend:8040
+    ports:
+      - "8010:8010"
+    depends_on:
+      - rag_service
+      - tool_service
+      - model_backend
+
+  rag_service:
+    build: .
+    command: uvicorn services.rag_service.main:app --host 0.0.0.0 --port 8020
+    ports:
+      - "8020:8020"
+
+  tool_service:
+    build: .
+    command: uvicorn services.tool_service.main:app --host 0.0.0.0 --port 8030
+    environment:
+      RAG_SERVICE_URL: http://rag_service:8020
+      TOOL_AUDIT_LOG_PATH: logs/tool_audit.jsonl
+    ports:
+      - "8030:8030"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - rag_service
+
+  model_backend:
+    build: .
+    command: uvicorn services.model_backend.main:app --host 0.0.0.0 --port 8040
+    environment:
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-mock}
+      OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-}
+      OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-}
+      OPENAI_COMPAT_MODEL: ${OPENAI_COMPAT_MODEL:-mock}
+    ports:
+      - "8040:8040"
+
+  mock_fast:
+    profiles:
+      - legacy
+    build: .
+    command: uvicorn services.mock_backend.main:app --host 0.0.0.0 --port 8001
+    environment:
+      BACKEND_ID: mock_fast
+      BACKEND_TYPE: mock
+      SUPPORTED_TASKS: summary,semantic_explain
+      MIN_LATENCY_MS: "80"
+      MAX_LATENCY_MS: "180"
+      ERROR_RATE: ${MOCK_FAST_ERROR_RATE:-0.02}
+      TIMEOUT_RATE: ${MOCK_FAST_TIMEOUT_RATE:-0.00}
+      TIMEOUT_SLEEP_MS: ${MOCK_FAST_TIMEOUT_SLEEP_MS:-3000}
+      HEURISTIC_QUALITY_SCORE: "0.70"
+      MOCK_RANDOM_SEED: "101"
+    ports:
+      - "8001:8001"
+
+  mock_quality:
+    profiles:
+      - legacy
+    build: .
+    command: uvicorn services.mock_backend.main:app --host 0.0.0.0 --port 8002
+    environment:
+      BACKEND_ID: mock_quality
+      BACKEND_TYPE: mock
+      SUPPORTED_TASKS: summary,semantic_explain,rag_qa,text_to_video
+      MIN_LATENCY_MS: "350"
+      MAX_LATENCY_MS: "750"
+      ERROR_RATE: ${MOCK_QUALITY_ERROR_RATE:-0.01}
+      TIMEOUT_RATE: ${MOCK_QUALITY_TIMEOUT_RATE:-0.00}
+      TIMEOUT_SLEEP_MS: ${MOCK_QUALITY_TIMEOUT_SLEEP_MS:-3000}
+      HEURISTIC_QUALITY_SCORE: "0.90"
+      MOCK_RANDOM_SEED: "202"
+    ports:
+      - "8002:8002"
+
+  mock_unstable:
+    profiles:
+      - legacy
+    build: .
+    command: uvicorn services.mock_backend.main:app --host 0.0.0.0 --port 8003
+    environment:
+      BACKEND_ID: mock_unstable
+      BACKEND_TYPE: mock
+      SUPPORTED_TASKS: summary,semantic_explain,rag_qa,tool_call,text_to_video
+      MIN_LATENCY_MS: "120"
+      MAX_LATENCY_MS: "1100"
+      ERROR_RATE: ${MOCK_UNSTABLE_ERROR_RATE:-0.20}
+      TIMEOUT_RATE: ${MOCK_UNSTABLE_TIMEOUT_RATE:-0.12}
+      TIMEOUT_SLEEP_MS: ${MOCK_UNSTABLE_TIMEOUT_SLEEP_MS:-3000}
+      HEURISTIC_QUALITY_SCORE: "0.58"
+      MOCK_RANDOM_SEED: "303"
+    ports:
+      - "8003:8003"

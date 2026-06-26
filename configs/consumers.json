@@ -1,0 +1,23 @@
+{
+  "version": "v0.7-dev",
+  "consumers": [
+    {
+      "consumer_id": "dev_consumer",
+      "api_key_id": "dev-key-default",
+      "api_key": "dev-key",
+      "permissions": [
+        "kb:project_docs:read",
+        "tool:doc_search:use",
+        "tool:inspection:use",
+        "tool:evidence_check:use",
+        "tool:business:read",
+        "tool:service_status:read",
+        "tool:image_generation:use",
+        "tool:video_generation:use"
+      ],
+      "allowed_workflows": ["*"],
+      "allowed_tools": ["*"],
+      "rate_limit_key": "consumer:dev_consumer"
+    }
+  ]
+}
