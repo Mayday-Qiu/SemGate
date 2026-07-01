@@ -1,8 +1,6 @@
 # SemGateway
 
-SemGateway 是一个面向知识问答、代码生成、图像/视频生成和文档写作任务的 Gateway Harness 原型。它不是单纯的 workflow selector，而是任务控制面：负责鉴权、限流、任务画像、workflow 选择、TaskContract 生成、受控工具调用、输出验收、trace 聚合，以及基于离线 eval 的 Planner Memory 更新。
-
-当前主线是 v1.0：旧的 `incident_analysis_workflow`、`doc_review_workflow` 不再作为执行主线维护。v1.0 只保留四类任务、五条 workflow：
+Gateway Harness 原型。
 
 ```text
 knowledge_qa_workflow        快速知识问答，调用 RAG、证据检查和 citation
@@ -14,7 +12,7 @@ document_writing_workflow    文档写作，通过 A2A 调 knowledge/media，禁
 
 ## 运行方式
 
-Mac 本机开发默认使用 Docker Desktop / Docker Compose 跑多服务。`.venv` 只用于本地脚本、DeepEval runner 和轻量检查，不作为服务运行环境。旧 Windows/WSL 和 conda 工作流不再作为默认路径维护。
+
 
 启动服务：
 
@@ -131,20 +129,3 @@ scripts/run_deepeval.py                  离线 eval runner
 scripts/update_planner_memory.py         eval 结果到 Planner Memory 规则的适配
 ```
 
-## 当前边界
-
-`rag_service` 当前仍是固定 evidence stub，不是真实向量检索系统。`media_generation_workflow` 可以返回 `implementation_status=placeholder`，这表示后端不可用或仍是占位 adapter，不能伪装成真实生成成功。`coding_workflow` 是受控代码建议链路，不执行 shell，不写文件。`document_writing_workflow` 禁止直接调用 RAG，只能通过 knowledge workflow 获取受限摘要和 citations。
-
-Planner Memory 只保存 route rules 和 contract rules，不保存事实内容，不进入 prompt，不替代 RAG。它只能影响路由软先验或增加 TaskContract 约束，不能绕过权限、health、capability hard filter 或 forbidden resource。
-
-## 常见问题
-
-如果 `scripts/run_deepeval.py` 输出 `failed=15`，先看错误是否是：
-
-```text
-<urlopen error [Errno 61] Connection refused>
-```
-
-这通常不是指标失败，而是 `gateway :8000` 没启动。先启动 Docker Compose，并确认 5 个 `/health` 都返回 `ok`。
-
-如果终端出现 `NotOpenSSLWarning`，通常是 macOS 系统 Python / LibreSSL 的警告，不是当前失败根因。优先使用 `.venv`，服务侧仍建议走 Docker Compose。
