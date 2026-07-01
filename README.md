@@ -83,7 +83,7 @@ python -c "import fastapi, pydantic, deepeval; print('env ok')"
 
 ## 验收
 
-Phase 1-3 快速验收：
+快速验收：
 
 ```bash
 make demo
@@ -91,7 +91,7 @@ make demo
 
 `make demo` 调用 `scripts/demo_run.py --all`，会检查服务健康、Preview/Dry-run、五条 workflow、TaskContract、VerificationGate、Planner Memory、工具 schema/权限错误和 trace 文件。
 
-Phase 4 DeepEval 离线评测：
+离线评测：
 
 ```bash
 source .venv/bin/activate
@@ -100,7 +100,7 @@ python scripts/run_deepeval.py --cases data/task_eval_cases.jsonl --request-dela
 python scripts/update_planner_memory.py --input outputs/eval/task_eval_results.jsonl
 ```
 
-DeepEval 只在离线 eval 中运行，不进入 `/v1/invoke` 在线主链路。在线请求只执行 Gateway 自己的 `VerificationGate`。DeepEval 输出用于生成：
+DeepEval 输出用于生成：
 
 ```text
 outputs/eval/task_eval_results.jsonl
