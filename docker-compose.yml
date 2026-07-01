@@ -1,0 +1,68 @@
+services:
+  gateway:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      SEMROUTE_API_KEY: dev-key
+      GATEWAY_REQUEST_TIMEOUT_S: ${GATEWAY_REQUEST_TIMEOUT_S:-1.5}
+      GATEWAY_RATE_LIMIT_ENABLED: ${GATEWAY_RATE_LIMIT_ENABLED:-true}
+      GATEWAY_RATE_LIMIT_REPLENISH_RATE: ${GATEWAY_RATE_LIMIT_REPLENISH_RATE:-1}
+      GATEWAY_RATE_LIMIT_BURST_CAPACITY: ${GATEWAY_RATE_LIMIT_BURST_CAPACITY:-5}
+      GATEWAY_RATE_LIMIT_REQUESTED_TOKENS: ${GATEWAY_RATE_LIMIT_REQUESTED_TOKENS:-1}
+      GATEWAY_LOG_PATH: logs/gateway.jsonl
+      GATEWAY_WORKFLOW_PROFILES_PATH: configs/workflow_profiles.json
+      GATEWAY_CONSUMERS_PATH: configs/consumers.json
+      GATEWAY_TRACE_LOG_PATH: logs/trace_events.jsonl
+      GATEWAY_TRACE_OUTPUT_DIR: outputs/traces
+      GATEWAY_TOOL_AUDIT_LOG_PATH: logs/tool_audit.jsonl
+      AGENT_ORCHESTRATOR_URL: http://agent_orchestrator:8010/invoke
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./outputs:/app/outputs
+    depends_on:
+      - agent_orchestrator
+
+  agent_orchestrator:
+    build: .
+    command: uvicorn services.agent_orchestrator.main:app --host 0.0.0.0 --port 8010
+    environment:
+      RAG_SERVICE_URL: http://rag_service:8020
+      TOOL_SERVICE_URL: http://tool_service:8030
+    ports:
+      - "8010:8010"
+    depends_on:
+      - rag_service
+      - tool_service
+
+  rag_service:
+    build: .
+    command: uvicorn services.rag_service.main:app --host 0.0.0.0 --port 8020
+    ports:
+      - "8020:8020"
+
+  tool_service:
+    build: .
+    command: uvicorn services.tool_service.main:app --host 0.0.0.0 --port 8030
+    environment:
+      RAG_SERVICE_URL: http://rag_service:8020
+      TOOL_AUDIT_LOG_PATH: logs/tool_audit.jsonl
+    ports:
+      - "8030:8030"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - rag_service
+
+  model_backend:
+    build: .
+    command: uvicorn services.model_backend.main:app --host 0.0.0.0 --port 8040
+    environment:
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-mock}
+      OPENAI_COMPAT_BASE_URL: ${OPENAI_COMPAT_BASE_URL:-}
+      OPENAI_COMPAT_API_KEY: ${OPENAI_COMPAT_API_KEY:-}
+      OPENAI_COMPAT_MODEL: ${OPENAI_COMPAT_MODEL:-mock}
+    ports:
+      - "8040:8040"

@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+
+logs
+outputs
+
+Miniconda3.sh
+higress-main.zip
+higress-main(reference)
+docs
+中期准备
+*.md

@@ -1,0 +1,1 @@
+"""Minimal SemGateway tool service."""
