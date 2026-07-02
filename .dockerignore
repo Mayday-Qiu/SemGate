@@ -1,4 +1,6 @@
 .git
+.env
+.env.txt
 .venv
 __pycache__
 *.py[cod]

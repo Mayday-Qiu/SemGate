@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Dict, List, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 
 @dataclass
@@ -18,6 +18,11 @@ def evaluate_record(record: Dict[str, Any]) -> Dict[str, MetricResult]:
     return {
         result.name: result
         for result in (
+            planner_schema_validity(record),
+            plan_validation_pass(record),
+            task_type_correctness(record),
+            workflow_plan_correctness(record),
+            contract_hint_coverage(record),
             route_correctness(record),
             contract_compliance(record),
             trace_event_coverage(record),
@@ -77,6 +82,8 @@ def contract_compliance(record: Dict[str, Any]) -> MetricResult:
 
 
 def trace_event_coverage(record: Dict[str, Any]) -> MetricResult:
+    if record.get("mode") == "preview":
+        return _result("TraceEventCoverageMetric", 1.0, True, "preview mode skips execution trace coverage", {})
     case = _case(record)
     contract = _task_contract(record)
     required = set(_as_list(case.get("expected_trace_nodes")))
@@ -99,6 +106,8 @@ def trace_event_coverage(record: Dict[str, Any]) -> MetricResult:
 
 
 def tool_compliance(record: Dict[str, Any]) -> MetricResult:
+    if record.get("mode") == "preview":
+        return _result("ToolComplianceMetric", 1.0, True, "preview mode skips tool execution compliance", {})
     case = _case(record)
     response = _response(record)
     contract = _task_contract(record)
@@ -120,6 +129,8 @@ def tool_compliance(record: Dict[str, Any]) -> MetricResult:
 
 
 def verification_pass(record: Dict[str, Any]) -> MetricResult:
+    if record.get("mode") == "preview":
+        return _result("VerificationPassMetric", 1.0, True, "preview mode skips output verification", {})
     case = _case(record)
     response = _response(record)
     expected = str(case.get("expected_status", "success"))
@@ -139,6 +150,8 @@ def verification_pass(record: Dict[str, Any]) -> MetricResult:
 
 
 def citation_source(record: Dict[str, Any]) -> MetricResult:
+    if record.get("mode") == "preview":
+        return _result("CitationSourceMetric", 1.0, True, "preview mode skips citation source verification", {})
     case = _case(record)
     response = _response(record)
     contract = _task_contract(record)
@@ -173,6 +186,14 @@ def citation_source(record: Dict[str, Any]) -> MetricResult:
 
 
 def schema_compliance(record: Dict[str, Any]) -> MetricResult:
+    if record.get("mode") == "preview":
+        response = _response(record)
+        required = {"request_id", "trace_id", "preview_status", "selected_workflow", "task_contract"}
+        return _checks_result(
+            "SchemaComplianceMetric",
+            [(field, _has_path(response, field)) for field in sorted(required)],
+            "preview response schema satisfies expected fields",
+        )
     case = _case(record)
     response = _response(record)
     contract = _task_contract(record)
@@ -182,6 +203,118 @@ def schema_compliance(record: Dict[str, Any]) -> MetricResult:
     required.discard("")
     checks = [(field, _has_path(response, field)) for field in sorted(required)]
     return _checks_result("SchemaComplianceMetric", checks, "response schema satisfies expected fields")
+
+
+def planner_schema_validity(record: Dict[str, Any]) -> MetricResult:
+    raw_plan = _raw_task_plan(record)
+    if not raw_plan:
+        return _result("PlannerSchemaValidityMetric", 1.0, True, "no planner output expected", {})
+    checks = [
+        ("plan_version", raw_plan.get("plan_version") == "2.0"),
+        ("primary_task_type", bool(raw_plan.get("primary_task_type"))),
+        ("execution_plan", isinstance(raw_plan.get("execution_plan"), list) and bool(raw_plan.get("execution_plan"))),
+    ]
+    for index, step in enumerate(_as_list(raw_plan.get("execution_plan"))):
+        if not isinstance(step, dict):
+            checks.append((f"step:{index}:object", False))
+            continue
+        checks.append((f"step:{index}:step_role", bool(step.get("step_role"))))
+        checks.append((f"step:{index}:workflow", bool(step.get("workflow"))))
+    return _checks_result("PlannerSchemaValidityMetric", checks, "planner output has required structure")
+
+
+def plan_validation_pass(record: Dict[str, Any]) -> MetricResult:
+    validation = _plan_validation(record)
+    if not validation:
+        return _result("PlanValidationPassMetric", 1.0, True, "no plan validation expected", {})
+    passed = validation.get("status") == "passed"
+    return _result(
+        "PlanValidationPassMetric",
+        1.0 if passed else 0.0,
+        passed,
+        "plan validation passed" if passed else "plan validation failed",
+        {"errors": validation.get("errors", [])},
+    )
+
+
+def task_type_correctness(record: Dict[str, Any]) -> MetricResult:
+    expected = _nested(_expected_plan(record), "primary_task_type") or _case(record).get("task_type")
+    plan = _validated_task_plan(record)
+    if not expected or not plan:
+        return _result("TaskTypeCorrectnessMetric", 1.0, True, "no task type expectation", {})
+    actual = plan.get("primary_task_type")
+    passed = actual == expected
+    return _result(
+        "TaskTypeCorrectnessMetric",
+        1.0 if passed else 0.0,
+        passed,
+        "planner selected expected task type" if passed else "planner task type mismatch",
+        {"expected": expected, "actual": actual},
+    )
+
+
+def workflow_plan_correctness(record: Dict[str, Any]) -> MetricResult:
+    expected_plan = _expected_plan(record)
+    required_secondary = _expected_secondary_tasks(expected_plan)
+    required_roles = _expected_required_roles(expected_plan)
+    role_workflows = _expected_role_workflows(expected_plan)
+    required_dependencies = _expected_dependencies(expected_plan)
+    if not required_secondary and not required_roles and not role_workflows and not required_dependencies:
+        return _result("WorkflowPlanCorrectnessMetric", 1.0, True, "no workflow plan expectation", {})
+    actual_plan = _validated_task_plan(record)
+    actual_roles = _actual_role_steps(actual_plan)
+    actual_secondary = _actual_secondary_tasks(actual_plan)
+    actual_dependencies = _actual_dependencies(actual_plan)
+
+    checks: List[Tuple[str, bool]] = []
+    for task_type in sorted(required_secondary):
+        checks.append((f"missing_required_secondary_task:{task_type}", task_type in actual_secondary))
+    for role in sorted(required_roles):
+        checks.append((f"missing_required_step_role:{role}", role in actual_roles))
+    for role, allowed_workflows in sorted(role_workflows.items()):
+        if role in required_roles or role in actual_roles:
+            actual_workflow = str(actual_roles.get(role, {}).get("workflow", ""))
+            checks.append((f"wrong_workflow_for_step_role:{role}", actual_workflow in allowed_workflows))
+    for dependency in sorted(required_dependencies):
+        checks.append((f"missing_required_dependency:{dependency[0]}->{dependency[1]}", dependency in actual_dependencies))
+    return _checks_result("WorkflowPlanCorrectnessMetric", checks, "planner workflow roles match expected plan")
+
+
+def contract_hint_coverage(record: Dict[str, Any]) -> MetricResult:
+    expected_plan = _expected_plan(record)
+    if not expected_plan:
+        return _result("ContractHintCoverageMetric", 1.0, True, "no contract hint expectation", {})
+    contract = _task_contract(record)
+    required_nodes = set(_as_list(_nested(expected_plan, "contract_hints.required_trace_events")))
+    required_fields = set(_as_list(_nested(expected_plan, "contract_hints.required_output_fields")))
+    required_acceptance_types = set(_as_list(expected_plan.get("required_acceptance_types")))
+    expected_forbidden = _expected_forbidden_tools(expected_plan)
+    contract_nodes = {
+        str(item.get("target"))
+        for item in _as_list(contract.get("acceptance_criteria"))
+        if isinstance(item, dict) and item.get("type") == "trace_event_required"
+    }
+    criteria_types = {
+        str(item.get("type"))
+        for item in _as_list(contract.get("acceptance_criteria"))
+        if isinstance(item, dict) and item.get("type")
+    }
+    contract_fields = set(_as_list(_nested(contract, "output_schema.required")))
+    contract_forbidden = set(_as_list(_nested(contract, "forbidden_resources.tools")))
+    actual_roles = _actual_role_steps(_validated_task_plan(record))
+
+    checks = [(f"missing_contract_hint:trace:{node}", node in contract_nodes) for node in sorted(required_nodes)]
+    checks.extend((f"missing_contract_hint:field:{field}", field in contract_fields) for field in sorted(required_fields))
+    checks.extend(
+        (f"missing_contract_hint:acceptance_type:{criterion_type}", criterion_type in criteria_types)
+        for criterion_type in sorted(required_acceptance_types)
+    )
+    for role, tools in sorted(expected_forbidden.items()):
+        step_forbidden = set(_as_list(actual_roles.get(role, {}).get("forbidden_tools")))
+        preserved = contract_forbidden | step_forbidden
+        for tool in sorted(tools):
+            checks.append((f"forbidden_tool_not_preserved:{role}:{tool}", tool in preserved))
+    return _checks_result("ContractHintCoverageMetric", checks, "task contract covers expected planner hints")
 
 
 try:
@@ -221,6 +354,31 @@ class _DeepEvalMetric(BaseMetric):  # type: ignore[misc, valid-type]
 class RouteCorrectnessMetric(_DeepEvalMetric):
     metric_name = "RouteCorrectnessMetric"
     evaluator = staticmethod(route_correctness)
+
+
+class PlannerSchemaValidityMetric(_DeepEvalMetric):
+    metric_name = "PlannerSchemaValidityMetric"
+    evaluator = staticmethod(planner_schema_validity)
+
+
+class PlanValidationPassMetric(_DeepEvalMetric):
+    metric_name = "PlanValidationPassMetric"
+    evaluator = staticmethod(plan_validation_pass)
+
+
+class TaskTypeCorrectnessMetric(_DeepEvalMetric):
+    metric_name = "TaskTypeCorrectnessMetric"
+    evaluator = staticmethod(task_type_correctness)
+
+
+class WorkflowPlanCorrectnessMetric(_DeepEvalMetric):
+    metric_name = "WorkflowPlanCorrectnessMetric"
+    evaluator = staticmethod(workflow_plan_correctness)
+
+
+class ContractHintCoverageMetric(_DeepEvalMetric):
+    metric_name = "ContractHintCoverageMetric"
+    evaluator = staticmethod(contract_hint_coverage)
 
 
 class ContractComplianceMetric(_DeepEvalMetric):
@@ -278,7 +436,150 @@ def _route_decision(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _task_contract(record: Dict[str, Any]) -> Dict[str, Any]:
-    return _nested(_response(record), "metadata.task_contract") or record.get("task_contract") or {}
+    return _nested(_response(record), "metadata.task_contract") or _response(record).get("task_contract") or record.get("task_contract") or {}
+
+
+def _planner(record: Dict[str, Any]) -> Dict[str, Any]:
+    return _nested(_response(record), "metadata.planner") or record.get("planner") or {}
+
+
+def _raw_task_plan(record: Dict[str, Any]) -> Dict[str, Any]:
+    return _nested(_response(record), "raw_task_plan") or _planner(record).get("raw_task_plan") or record.get("raw_task_plan") or {}
+
+
+def _validated_task_plan(record: Dict[str, Any]) -> Dict[str, Any]:
+    return (
+        _nested(_response(record), "validated_task_plan")
+        or _planner(record).get("validated_task_plan")
+        or record.get("validated_task_plan")
+        or {}
+    )
+
+
+def _plan_validation(record: Dict[str, Any]) -> Dict[str, Any]:
+    return _nested(_response(record), "plan_validation") or _planner(record).get("plan_validation") or record.get("plan_validation") or {}
+
+
+def _expected_plan(record: Dict[str, Any]) -> Dict[str, Any]:
+    expected = _case(record).get("expected_plan")
+    return expected if isinstance(expected, dict) else {}
+
+
+def _role_workflows(plan: Dict[str, Any]) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for step in _as_list(plan.get("execution_plan")):
+        if isinstance(step, dict) and step.get("step_role") and step.get("workflow"):
+            result[str(step["step_role"])] = str(step["workflow"])
+    return result
+
+
+def _expected_secondary_tasks(plan: Dict[str, Any]) -> Set[str]:
+    values = _as_list(plan.get("required_secondary_task_types"))
+    if not values:
+        values = _as_list(plan.get("secondary_task_types"))
+    return {str(item) for item in values if str(item)}
+
+
+def _expected_required_roles(plan: Dict[str, Any]) -> Set[str]:
+    roles = {str(item) for item in _as_list(plan.get("required_step_roles")) if str(item)}
+    if roles:
+        return roles
+    return set(_role_workflows(plan))
+
+
+def _expected_role_workflows(plan: Dict[str, Any]) -> Dict[str, Set[str]]:
+    result: Dict[str, Set[str]] = {}
+    raw = plan.get("accepted_workflows_by_step_role")
+    if isinstance(raw, dict):
+        for role, workflows in raw.items():
+            allowed = {str(item) for item in _as_list(workflows) if str(item)}
+            if allowed:
+                result[str(role)] = allowed
+    for role, workflow in _role_workflows(plan).items():
+        result.setdefault(role, {workflow})
+    return result
+
+
+def _expected_dependencies(plan: Dict[str, Any]) -> Set[Tuple[str, str]]:
+    raw_dependencies = _as_list(plan.get("required_dependencies"))
+    if raw_dependencies:
+        return _dependency_pairs(raw_dependencies)
+    return _actual_dependencies(plan)
+
+
+def _actual_role_steps(plan: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    result: Dict[str, Dict[str, Any]] = {}
+    for step in _as_list(plan.get("execution_plan")):
+        if isinstance(step, dict) and step.get("step_role"):
+            result[str(step["step_role"])] = step
+    return result
+
+
+def _actual_secondary_tasks(plan: Dict[str, Any]) -> Set[str]:
+    tasks = {str(item) for item in _as_list(plan.get("secondary_task_types")) if str(item)}
+    for step in _as_list(plan.get("execution_plan")):
+        if not isinstance(step, dict):
+            continue
+        if step.get("task_type"):
+            tasks.add(str(step["task_type"]))
+        workflow_task = _workflow_task_type(str(step.get("workflow", "")))
+        if workflow_task:
+            tasks.add(workflow_task)
+    return tasks
+
+
+def _workflow_task_type(workflow: str) -> Optional[str]:
+    return {
+        "knowledge_qa_workflow": "knowledge_qa",
+        "large_knowledge_qa_workflow": "knowledge_qa",
+        "coding_workflow": "coding",
+        "media_generation_workflow": "media_generation",
+        "document_writing_workflow": "document_writing",
+    }.get(workflow)
+
+
+def _actual_dependencies(plan: Dict[str, Any]) -> Set[Tuple[str, str]]:
+    steps = [step for step in _as_list(plan.get("execution_plan")) if isinstance(step, dict)]
+    id_to_role = {str(step.get("step_id")): str(step.get("step_role")) for step in steps if step.get("step_id") and step.get("step_role")}
+    pairs = set()
+    for step in steps:
+        role = str(step.get("step_role", ""))
+        if not role:
+            continue
+        for dependency_id in _as_list(step.get("depends_on")):
+            dependency_role = id_to_role.get(str(dependency_id), str(dependency_id))
+            if dependency_role:
+                pairs.add((role, dependency_role))
+    return pairs
+
+
+def _dependency_pairs(raw_dependencies: List[Any]) -> Set[Tuple[str, str]]:
+    pairs = set()
+    for item in raw_dependencies:
+        if not isinstance(item, dict):
+            continue
+        from_role = str(item.get("from_step_role", "") or item.get("step_role", "")).strip()
+        depends_role = str(item.get("depends_on_step_role", "") or item.get("depends_on", "")).strip()
+        if from_role and depends_role:
+            pairs.add((from_role, depends_role))
+    return pairs
+
+
+def _expected_forbidden_tools(plan: Dict[str, Any]) -> Dict[str, Set[str]]:
+    result: Dict[str, Set[str]] = {}
+    raw = plan.get("forbidden_tools_by_step_role")
+    if isinstance(raw, dict):
+        for role, tools in raw.items():
+            values = {str(item) for item in _as_list(tools) if str(item)}
+            if values:
+                result[str(role)] = values
+    for step in _as_list(plan.get("execution_plan")):
+        if not isinstance(step, dict) or not step.get("step_role"):
+            continue
+        tools = {str(item) for item in _as_list(step.get("forbidden_tools")) if str(item)}
+        if tools:
+            result.setdefault(str(step["step_role"]), set()).update(tools)
+    return result
 
 
 def _criteria(contract: Dict[str, Any]) -> Set[str]:

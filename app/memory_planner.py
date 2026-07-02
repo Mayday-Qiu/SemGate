@@ -3,16 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, get_args
 
-from app.schemas import AcceptanceCriterion, CriterionType, TaskProfile, WorkflowProfile
+from app.schemas import AcceptanceCriterion, CriterionType, TaskPlan, TaskProfile, WorkflowProfile
 from services.tool_service.registry import get_tool
 
 
 ALLOWED_APPLIES_KEYS = {
+    "primary_task_type",
     "task_type",
     "selected_workflow",
+    "semantic_features",
     "capabilities_any",
     "tools_any",
     "profile_reason_any",
+}
+ALLOWED_SEMANTIC_FEATURE_KEYS = {
+    "deliverable_type",
+    "requires_external_evidence",
+    "requires_citations",
+    "requires_media_asset",
+    "evidence_need",
+    "complexity",
 }
 ALLOWED_PATCH_KEYS = {
     "add_required_trace_events",
@@ -55,6 +65,7 @@ class MemoryPlanner:
         workflow_profiles: Sequence[WorkflowProfile],
         route_rules: Sequence[Dict[str, Any]],
         warnings: Sequence[str] = (),
+        task_plan: Optional[TaskPlan] = None,
     ) -> MemoryPlannerResult:
         result = MemoryPlannerResult(enabled=enabled, warnings=list(warnings))
         if not enabled:
@@ -74,7 +85,14 @@ class MemoryPlanner:
             if workflow_profile is None:
                 result.warnings.append(f"{rule_id}: unknown workflow {workflow_id}")
                 continue
-            if not self._matches(rule, task_profile, workflow_profile, selected_workflow=None, warnings=result.warnings):
+            if not self._matches(
+                rule,
+                task_profile,
+                workflow_profile,
+                selected_workflow=None,
+                warnings=result.warnings,
+                task_plan=task_plan,
+            ):
                 continue
             boost = _safe_boost(hint.get("score_boost", 0.0))
             if boost <= 0:
@@ -92,6 +110,7 @@ class MemoryPlanner:
         selected_workflow: Optional[str],
         workflow_profiles: Sequence[WorkflowProfile],
         contract_rules: Sequence[Dict[str, Any]],
+        task_plan: Optional[TaskPlan] = None,
     ) -> MemoryPlannerResult:
         if not base.enabled:
             return base
@@ -102,7 +121,14 @@ class MemoryPlanner:
             rule_id = str(rule.get("rule_id", "contract_rule"))
             if rule.get("status", "active") != "active":
                 continue
-            if not self._matches(rule, task_profile, workflow_profile, selected_workflow, base.warnings):
+            if not self._matches(
+                rule,
+                task_profile,
+                workflow_profile,
+                selected_workflow,
+                base.warnings,
+                task_plan,
+            ):
                 continue
             patch = rule.get("patch")
             if not isinstance(patch, dict):
@@ -121,6 +147,7 @@ class MemoryPlanner:
         workflow_profile: Optional[WorkflowProfile],
         selected_workflow: Optional[str],
         warnings: List[str],
+        task_plan: Optional[TaskPlan] = None,
     ) -> bool:
         rule_id = str(rule.get("rule_id", "memory_rule"))
         applies_when = rule.get("applies_when", {})
@@ -135,7 +162,12 @@ class MemoryPlanner:
 
         if applies_when.get("task_type") and applies_when["task_type"] != task_profile.task_type:
             return False
+        primary_task_type = _plan_primary_task_type(task_plan) or task_profile.task_type
+        if applies_when.get("primary_task_type") and applies_when["primary_task_type"] != primary_task_type:
+            return False
         if applies_when.get("selected_workflow") and applies_when["selected_workflow"] != selected_workflow:
+            return False
+        if not _semantic_features_match(rule_id, applies_when.get("semantic_features"), task_plan, warnings):
             return False
 
         task_capabilities = set(task_profile.required_capabilities)
@@ -196,6 +228,33 @@ def _text_any_match(raw_values: Any, text: str) -> bool:
         return True
     values = [str(item).lower() for item in _as_list(raw_values)]
     return any(value in text for value in values)
+
+
+def _semantic_features_match(
+    rule_id: str,
+    expected: Any,
+    task_plan: Optional[TaskPlan],
+    warnings: List[str],
+) -> bool:
+    if expected is None:
+        return True
+    if not isinstance(expected, dict):
+        warnings.append(f"{rule_id}: semantic_features must be an object")
+        return False
+    unknown_keys = sorted(set(expected) - ALLOWED_SEMANTIC_FEATURE_KEYS)
+    if unknown_keys:
+        warnings.append(f"{rule_id}: unsupported semantic_features {unknown_keys}")
+        return False
+    if task_plan is None:
+        return False
+    actual = task_plan.semantic_features if isinstance(task_plan.semantic_features, dict) else {}
+    return all(actual.get(key) == value for key, value in expected.items())
+
+
+def _plan_primary_task_type(task_plan: Optional[TaskPlan]) -> Optional[str]:
+    if task_plan is None:
+        return None
+    return str(task_plan.primary_task_type)
 
 
 def _safe_boost(raw_value: Any) -> float:

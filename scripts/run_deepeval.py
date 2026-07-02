@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import sys
@@ -17,6 +18,38 @@ if str(ROOT_DIR) not in sys.path:
 from eval.metrics.semgateway_metrics import evaluate_record, metric_results_json
 
 
+PLANNER_METRICS = {
+    "PlannerSchemaValidityMetric",
+    "PlanValidationPassMetric",
+    "TaskTypeCorrectnessMetric",
+    "WorkflowPlanCorrectnessMetric",
+    "ContractHintCoverageMetric",
+}
+EXECUTION_METRICS = {
+    "RouteCorrectnessMetric",
+    "ContractComplianceMetric",
+    "TraceEventCoverageMetric",
+    "ToolComplianceMetric",
+    "VerificationPassMetric",
+    "CitationSourceMetric",
+    "SchemaComplianceMetric",
+}
+FAILURE_PRIORITY = [
+    ("PlannerSchemaValidityMetric", "schema_validation_failed", "planner_prompt"),
+    ("PlanValidationPassMetric", "plan_validation_failed", "plan_validator"),
+    ("TaskTypeCorrectnessMetric", "wrong_primary_task_type", "planner_prompt"),
+    ("WorkflowPlanCorrectnessMetric", "workflow_plan_mismatch", "planner_context"),
+    ("RouteCorrectnessMetric", "route_mismatch", "agentic_router"),
+    ("ContractHintCoverageMetric", "missing_contract_hint", "task_contract_builder"),
+    ("ContractComplianceMetric", "contract_compliance_failed", "task_contract_builder"),
+    ("TraceEventCoverageMetric", "execution_trace_missing", "workflow_implementation"),
+    ("ToolComplianceMetric", "tool_compliance_failed", "tool_service"),
+    ("CitationSourceMetric", "citation_missing", "verification_gate"),
+    ("VerificationPassMetric", "verification_failed", "verification_gate"),
+    ("SchemaComplianceMetric", "output_schema_missing", "workflow_implementation"),
+]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run SemGateway Phase 4 offline eval.")
     parser.add_argument("--cases", default="data/task_eval_cases.jsonl")
@@ -27,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tool-audit", default="logs/tool_audit.jsonl")
     parser.add_argument("--request-delay-s", type=float, default=0.2)
     parser.add_argument("--timeout-s", type=float, default=45.0)
+    parser.add_argument("--mode", choices=["invoke", "preview"], default="invoke")
     parser.add_argument("--no-fail", action="store_true", help="Do not exit non-zero on failed metrics.")
     return parser.parse_args()
 
@@ -41,7 +75,7 @@ def main() -> None:
     headers = {"x-api-key": args.api_key, "Content-Type": "application/json"}
     base_url = args.gateway_url.rstrip("/")
     for case in cases:
-        record = _run_case(base_url, headers, case, Path(args.tool_audit), args.timeout_s)
+        record = _run_case(base_url, headers, case, Path(args.tool_audit), args.timeout_s, args.mode)
         _attach_metrics(record)
         records.append(record)
         time.sleep(args.request_delay_s)
@@ -65,12 +99,14 @@ def _run_case(
     case: Dict[str, Any],
     tool_audit_path: Path,
     timeout_s: float,
+    mode: str,
 ) -> Dict[str, Any]:
     payload = case.get("payload") if isinstance(case.get("payload"), dict) else _payload_from_case(case)
     response_body: Dict[str, Any]
     http_status = None
     try:
-        http_status, response_body = _post_json(f"{base_url}/v1/invoke", headers, payload, timeout_s)
+        endpoint = "/v1/preview" if mode == "preview" else "/v1/invoke"
+        http_status, response_body = _post_json(f"{base_url}{endpoint}", headers, payload, timeout_s)
     except Exception as exc:
         response_body = {"status": "failed", "error": str(exc)}
 
@@ -78,6 +114,7 @@ def _run_case(
     trace_id = response_body.get("trace_id", "")
     return {
         "schema": "semgateway_task_eval_result_v1",
+        "mode": mode,
         "case": _safe_case(case, payload),
         "case_id": case.get("case_id"),
         "task_type": payload.get("task_type") or case.get("task_type"),
@@ -86,6 +123,10 @@ def _run_case(
         "verification_status": _nested(response_body, "verification.status"),
         "response_http_status": http_status,
         "response": response_body,
+        "planner": _planner_artifacts(response_body),
+        "raw_task_plan": _planner_artifacts(response_body).get("raw_task_plan"),
+        "validated_task_plan": _planner_artifacts(response_body).get("validated_task_plan"),
+        "plan_validation": _planner_artifacts(response_body).get("plan_validation"),
         "trace_events": trace_events,
         "trace_nodes": [event.get("node") for event in trace_events if isinstance(event, dict)],
         "tool_audit": _read_tool_audit(tool_audit_path, trace_id),
@@ -113,10 +154,66 @@ def _post_json(url: str, headers: Dict[str, str], payload: Dict[str, Any], timeo
 
 def _attach_metrics(record: Dict[str, Any]) -> None:
     results = evaluate_record(record)
-    record["metric_results"] = metric_results_json(results)
+    metric_results = metric_results_json(results)
+    record["metric_results"] = metric_results
     record["metric_scores"] = {name: result.score for name, result in results.items()}
     record["failed_metrics"] = [name for name, result in results.items() if not result.passed]
+    record["planner_metrics"] = {
+        name: result for name, result in metric_results.items() if name in PLANNER_METRICS
+    }
+    record["execution_metrics"] = {
+        name: result for name, result in metric_results.items() if name in EXECUTION_METRICS
+    }
+    failure_type, feedback_target = _classify_failure(record)
+    record["failure_type"] = failure_type
+    record["feedback_target"] = feedback_target
     record["deepeval_custom_metric_checked"] = _deepeval_smoke(record)
+
+
+def _classify_failure(record: Dict[str, Any]) -> tuple[str, str]:
+    http_status = record.get("response_http_status")
+    if http_status is None or _safe_int(http_status) >= 500:
+        return "gateway_request_failed", "gateway_runtime"
+    if _safe_int(http_status) >= 400:
+        return "gateway_request_failed", "eval_case"
+
+    failed = set(record.get("failed_metrics") or [])
+    if not failed:
+        return "none", "none"
+
+    details = _metric_failed_details(record)
+    if "WorkflowPlanCorrectnessMetric" in failed:
+        workflow_failed = details.get("WorkflowPlanCorrectnessMetric", [])
+        if any(item.startswith("missing_required_secondary_task:") for item in workflow_failed):
+            return "missing_required_secondary_task", "planner_context"
+        if any(item.startswith("missing_required_step_role:") for item in workflow_failed):
+            return "missing_required_step_role", "planner_context"
+        if any(item.startswith("wrong_workflow_for_step_role:") for item in workflow_failed):
+            return "wrong_workflow_for_step_role", "workflow_profile"
+        if any(item.startswith("missing_required_dependency:") for item in workflow_failed):
+            return "missing_required_dependency", "planner_context"
+    if "ContractHintCoverageMetric" in failed:
+        contract_failed = details.get("ContractHintCoverageMetric", [])
+        if any(item.startswith("forbidden_tool_not_preserved:") for item in contract_failed):
+            return "forbidden_tool_not_preserved", "task_contract_builder"
+        if any(item.startswith("missing_contract_hint:") or item.startswith("trace:") or item.startswith("field:") for item in contract_failed):
+            return "missing_contract_hint", "task_contract_builder"
+
+    for metric_name, failure_type, feedback_target in FAILURE_PRIORITY:
+        if metric_name in failed:
+            return failure_type, feedback_target
+    return "unknown_failure", "eval_case"
+
+
+def _metric_failed_details(record: Dict[str, Any]) -> Dict[str, List[str]]:
+    details: Dict[str, List[str]] = {}
+    for name, result in (record.get("metric_results") or {}).items():
+        if not isinstance(result, dict):
+            continue
+        raw_failed = _nested(result, "details.failed")
+        if isinstance(raw_failed, list):
+            details[str(name)] = [str(item) for item in raw_failed]
+    return details
 
 
 def _deepeval_smoke(record: Dict[str, Any]) -> bool:
@@ -125,11 +222,16 @@ def _deepeval_smoke(record: Dict[str, Any]) -> bool:
         from eval.metrics import (
             CitationSourceMetric,
             ContractComplianceMetric,
+            ContractHintCoverageMetric,
+            PlanValidationPassMetric,
+            PlannerSchemaValidityMetric,
             RouteCorrectnessMetric,
             SchemaComplianceMetric,
+            TaskTypeCorrectnessMetric,
             ToolComplianceMetric,
             TraceEventCoverageMetric,
             VerificationPassMetric,
+            WorkflowPlanCorrectnessMetric,
         )
     except Exception:
         return False
@@ -144,6 +246,11 @@ def _deepeval_smoke(record: Dict[str, Any]) -> bool:
         pass
     for metric_cls in (
         RouteCorrectnessMetric,
+        PlannerSchemaValidityMetric,
+        PlanValidationPassMetric,
+        TaskTypeCorrectnessMetric,
+        WorkflowPlanCorrectnessMetric,
+        ContractHintCoverageMetric,
         ContractComplianceMetric,
         TraceEventCoverageMetric,
         ToolComplianceMetric,
@@ -189,6 +296,20 @@ def _load_trace_events(response_body: Dict[str, Any]) -> List[Dict[str, Any]]:
     return events if isinstance(events, list) else []
 
 
+def _planner_artifacts(response_body: Dict[str, Any]) -> Dict[str, Any]:
+    direct = {
+        "planner_policy": response_body.get("planner_policy"),
+        "planner_context_summary": response_body.get("planner_context_summary"),
+        "raw_task_plan": response_body.get("raw_task_plan"),
+        "validated_task_plan": response_body.get("validated_task_plan"),
+        "plan_validation": response_body.get("plan_validation"),
+    }
+    if any(value is not None for value in direct.values()):
+        return direct
+    metadata_planner = _nested(response_body, "metadata.planner")
+    return metadata_planner if isinstance(metadata_planner, dict) else {}
+
+
 def _read_tool_audit(path: Path, trace_id: str) -> List[Dict[str, Any]]:
     if not trace_id or not path.exists():
         return []
@@ -212,6 +333,18 @@ def _write_report(path: Path, records: List[Dict[str, Any]]) -> None:
         passed = sum(1 for record in records if metric not in record.get("failed_metrics", []))
         average = round(sum(scores) / len(scores), 4) if scores else 0.0
         lines.append(f"- {metric}: avg={average}, passed={passed}/{len(records)}")
+    lines.append("")
+    failure_counts = Counter(str(record.get("failure_type", "unknown")) for record in records)
+    target_counts = Counter(str(record.get("feedback_target", "unknown")) for record in records)
+    lines.append("## Failure Types")
+    lines.append("")
+    for name, count in sorted(failure_counts.items()):
+        lines.append(f"- {name}: {count}")
+    lines.append("")
+    lines.append("## Feedback Targets")
+    lines.append("")
+    for name, count in sorted(target_counts.items()):
+        lines.append(f"- {name}: {count}")
     lines.append("")
     lines.append("| case_id | workflow | status | failed_metrics |")
     lines.append("|---|---|---|---|")
@@ -247,6 +380,13 @@ def _nested(payload: Any, path: str) -> Any:
         else:
             return None
     return current
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 if __name__ == "__main__":

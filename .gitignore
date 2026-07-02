@@ -7,6 +7,7 @@ __pycache__/
 
 # local env
 .env
+.env.txt
 .venv/
 .conda/
 Miniconda3.sh

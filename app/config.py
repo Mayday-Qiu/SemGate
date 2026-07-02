@@ -22,6 +22,16 @@ class Settings:
     rate_limit_requested_tokens: float
     memory_planner_enabled: bool
     planner_memory_dir: Path
+    task_planner_enabled: bool
+    siliconflow_base_url: str
+    siliconflow_api_key: str
+    planner_model_id: str
+    planner_temperature: float
+    planner_top_p: float
+    planner_max_tokens: int
+    planner_timeout_s: float
+    planner_repair_max_retries: int
+    planner_enable_thinking: bool
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -73,4 +83,14 @@ def load_settings() -> Settings:
         rate_limit_requested_tokens=_get_float("GATEWAY_RATE_LIMIT_REQUESTED_TOKENS", 1.0),
         memory_planner_enabled=_get_bool("MEMORY_PLANNER_ENABLED", True),
         planner_memory_dir=Path(os.getenv("PLANNER_MEMORY_DIR", "outputs/planner_memory")),
+        task_planner_enabled=_get_bool("TASK_PLANNER_ENABLED", False),
+        siliconflow_base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
+        siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", ""),
+        planner_model_id=os.getenv("PLANNER_MODEL_ID", "Qwen/Qwen3-8B"),
+        planner_temperature=_get_float("PLANNER_TEMPERATURE", 0.0),
+        planner_top_p=_get_float("PLANNER_TOP_P", 0.8),
+        planner_max_tokens=_get_int("PLANNER_MAX_TOKENS", 1200),
+        planner_timeout_s=_get_float("PLANNER_TIMEOUT_SECONDS", 45.0),
+        planner_repair_max_retries=_get_int("PLANNER_REPAIR_MAX_RETRIES", 1),
+        planner_enable_thinking=_get_bool("PLANNER_ENABLE_THINKING", False),
     )

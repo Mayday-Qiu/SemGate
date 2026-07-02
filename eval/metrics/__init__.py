@@ -1,15 +1,25 @@
 from eval.metrics.semgateway_metrics import (
     CitationSourceMetric,
     ContractComplianceMetric,
+    ContractHintCoverageMetric,
+    PlanValidationPassMetric,
+    PlannerSchemaValidityMetric,
     RouteCorrectnessMetric,
     SchemaComplianceMetric,
+    TaskTypeCorrectnessMetric,
     ToolComplianceMetric,
     TraceEventCoverageMetric,
     VerificationPassMetric,
+    WorkflowPlanCorrectnessMetric,
     evaluate_record,
 )
 
 __all__ = [
+    "PlannerSchemaValidityMetric",
+    "PlanValidationPassMetric",
+    "TaskTypeCorrectnessMetric",
+    "WorkflowPlanCorrectnessMetric",
+    "ContractHintCoverageMetric",
     "RouteCorrectnessMetric",
     "ContractComplianceMetric",
     "TraceEventCoverageMetric",

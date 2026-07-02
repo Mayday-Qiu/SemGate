@@ -103,6 +103,14 @@ class TaskProfile(BaseModel):
     priority: Priority = "normal"
     task_type_hint: Optional[AgenticTaskType] = None
     profile_reason: List[str] = Field(default_factory=list)
+    rough_signals: Dict[str, Any] = Field(default_factory=dict)
+    planner_policy: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlannerPolicyDecision(BaseModel):
+    planner_required: bool
+    reason_codes: List[str] = Field(default_factory=list)
+    bypass_reason: Optional[str] = None
 
 
 class WorkflowProfile(BaseModel):
@@ -201,6 +209,39 @@ class AcceptanceCriterion(BaseModel):
     description: str = ""
 
 
+class ContractHints(BaseModel):
+    required_output_fields: List[str] = Field(default_factory=list)
+    required_trace_events: List[str] = Field(default_factory=list)
+
+
+class TaskPlanStep(BaseModel):
+    step_id: str = Field(min_length=1)
+    step_role: str = Field(min_length=1)
+    workflow: str = Field(min_length=1)
+    purpose: str = ""
+    task_type: Optional[AgenticTaskType] = None
+    required_tools: List[str] = Field(default_factory=list)
+    forbidden_tools: List[str] = Field(default_factory=list)
+    depends_on: List[str] = Field(default_factory=list)
+    required: bool = True
+
+
+class TaskPlan(BaseModel):
+    plan_version: str = "2.0"
+    primary_task_type: AgenticTaskType
+    secondary_task_types: List[AgenticTaskType] = Field(default_factory=list)
+    semantic_features: Dict[str, Any] = Field(default_factory=dict)
+    execution_plan: List[TaskPlanStep] = Field(default_factory=list)
+    contract_hints: ContractHints = Field(default_factory=ContractHints)
+
+
+class PlanValidationResult(BaseModel):
+    status: Literal["passed", "failed"]
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    repairable: bool = False
+
+
 class TaskContract(BaseModel):
     contract_id: str
     task_type: AgenticTaskType
@@ -247,6 +288,11 @@ class GatewayPreviewResponse(BaseModel):
     reasons: List[str] = Field(default_factory=list)
     next_actions: List[str] = Field(default_factory=list)
     memory_planner: Dict[str, Any] = Field(default_factory=dict)
+    planner_policy: Optional[PlannerPolicyDecision] = None
+    planner_context_summary: Dict[str, Any] = Field(default_factory=dict)
+    raw_task_plan: Optional[Dict[str, Any]] = None
+    validated_task_plan: Optional[TaskPlan] = None
+    plan_validation: Optional[PlanValidationResult] = None
 
 
 class TraceEvent(BaseModel):

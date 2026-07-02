@@ -27,6 +27,7 @@ class TaskProfileBuilder:
         inferred_task_type, reasons = self._infer_task_type(request)
         metadata = request.metadata
         profile_seed = self._profile_seed(inferred_task_type, request)
+        rough_signals = self._rough_signals(request, inferred_task_type)
 
         evidence_required = bool(metadata.get("evidence_required", profile_seed["evidence_required"]))
         latency_slo_ms = self._metadata_float(metadata, "latency_slo_ms", 5000.0)
@@ -49,6 +50,7 @@ class TaskProfileBuilder:
             priority=request.priority,
             task_type_hint=request.task_type,
             profile_reason=reasons,
+            rough_signals=rough_signals,
         )
 
     def resolve_user_permissions(self, request: AgenticGatewayRequest) -> List[str]:
@@ -275,6 +277,34 @@ class TaskProfileBuilder:
         if self._contains_any(text, video_keywords):
             return "video"
         return "image"
+
+    def _rough_signals(self, request: AgenticGatewayRequest, inferred_task_type: AgenticTaskType) -> Dict[str, Any]:
+        text = f"{request.input} {request.metadata}".lower()
+        possible = {inferred_task_type}
+        keyword_map = {
+            "knowledge_qa": {"knowledge", "citation", "evidence", "docs", "rag", "知识", "引用", "证据", "资料", "文档"},
+            "coding": {"code", "debug", "patch", "test", "python", "typescript", "代码", "调试", "测试", "补丁"},
+            "media_generation": {"image", "video", "diagram", "poster", "architecture", "图片", "图像", "视频", "架构图", "海报"},
+            "document_writing": {"document", "proposal", "report", "write", "draft", "文档", "方案", "报告", "撰写", "整理成"},
+        }
+        for task_type, keywords in keyword_map.items():
+            if self._contains_any(text, keywords):
+                possible.add(task_type)  # type: ignore[arg-type]
+        requires_external_evidence = self._contains_any(
+            text,
+            {"according", "evidence", "citation", "source", "docs", "根据", "证据", "引用", "出处", "资料"},
+        )
+        has_multi_deliverable = self._contains_any(text, {" and ", "with ", "并", "以及", "同时", "配", "插入"})
+        requires_a2a = "document_writing" in possible and bool(possible & {"knowledge_qa", "media_generation"})
+        return {
+            "possible_task_types": sorted(possible),
+            "requires_external_evidence": requires_external_evidence,
+            "requires_structured_output": self._contains_any(text, {"json", "table", "outline", "schema", "表格", "大纲", "结构化"}),
+            "requires_multi_step_execution": has_multi_deliverable or requires_a2a or len(possible) > 1,
+            "requires_a2a": requires_a2a,
+            "has_multi_deliverable": has_multi_deliverable,
+            "has_explicit_task_type": request.task_type == inferred_task_type,
+        }
 
     def _metadata_float(self, metadata: Dict[str, Any], name: str, default: float) -> float:
         value = metadata.get(name, default)

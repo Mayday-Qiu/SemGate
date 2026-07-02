@@ -8,6 +8,7 @@ from app.schemas import (
     AgenticGatewayRequest,
     PreviewStatus,
     TaskContract,
+    TaskPlan,
     TaskProfile,
 )
 
@@ -19,6 +20,7 @@ class TaskContractBuilder:
         task_profile: TaskProfile,
         selected_workflow: Optional[str],
         contract_patches: Optional[Sequence[Dict[str, Any]]] = None,
+        validated_task_plan: Optional[TaskPlan] = None,
     ) -> TaskContract:
         acceptance_criteria = self._criteria(task_profile, selected_workflow)
         forbidden_resources = self._forbidden_resources(task_profile.task_type)
@@ -40,6 +42,8 @@ class TaskContractBuilder:
             latency_slo_ms=task_profile.latency_slo_ms,
             cost_budget=task_profile.cost_budget,
         )
+        if validated_task_plan is not None:
+            self._apply_task_plan(contract, validated_task_plan)
         self._apply_contract_patches(contract, contract_patches or [])
         return contract
 
@@ -200,6 +204,50 @@ class TaskContractBuilder:
                     description=str(raw_criterion.get("description", "Added by MemoryPlanner.")),
                 )
                 self._append_criterion(contract, criterion)
+
+    def _apply_task_plan(self, contract: TaskContract, plan: TaskPlan) -> None:
+        for field in plan.contract_hints.required_output_fields:
+            _append_unique(contract.output_schema.setdefault("required", []), str(field))
+        for node in plan.contract_hints.required_trace_events:
+            node_name = str(node)
+            self._append_criterion(
+                contract,
+                AcceptanceCriterion(
+                    criterion_id=f"plan:trace_node:{node_name}",
+                    type="trace_event_required",
+                    target=node_name,
+                    description=f"TaskPlan requires trace node {node_name}.",
+                ),
+            )
+        if contract.selected_workflow is None:
+            return
+        for step in plan.execution_plan:
+            if step.workflow != contract.selected_workflow:
+                continue
+            for tool in step.required_tools:
+                _append_unique(contract.required_tools, tool)
+                _append_unique(contract.allowed_resources.setdefault("tools", []), tool)
+                self._append_criterion(
+                    contract,
+                    AcceptanceCriterion(
+                        criterion_id=f"plan:tool_success:{tool}",
+                        type="tool_success_required",
+                        target=tool,
+                        description=f"TaskPlan requires tool {tool} to complete successfully.",
+                    ),
+                )
+            for tool in step.forbidden_tools:
+                _append_unique(contract.forbidden_resources.setdefault("tools", []), tool)
+                self._append_criterion(
+                    contract,
+                    AcceptanceCriterion(
+                        criterion_id=f"plan:forbidden_tool:{tool}",
+                        type="resource_forbidden",
+                        target="tools",
+                        params={"names": [tool]},
+                        description=f"TaskPlan forbids direct use of {tool}.",
+                    ),
+                )
 
     def _append_criterion(self, contract: TaskContract, criterion: AcceptanceCriterion) -> None:
         if any(existing.criterion_id == criterion.criterion_id for existing in contract.acceptance_criteria):
