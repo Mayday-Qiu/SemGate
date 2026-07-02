@@ -91,8 +91,6 @@ python -m pip install -U deepeval
 python -c "import fastapi, pydantic, deepeval; print('env ok')"
 ```
 
-`.venv/`、`logs/`、`outputs/` 都是本地生成物，默认不需要提交。
-
 ## 验收与评测
 
 快速验收：
